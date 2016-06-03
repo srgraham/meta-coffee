@@ -1,2 +1,8 @@
 node_modules/
 .DS_STORE
+
+.idea
+meta-coffee.iml
+workspace/*
+src/custom/*.js
+bin/*
