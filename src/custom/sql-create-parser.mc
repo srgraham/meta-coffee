@@ -2,6 +2,8 @@
 #{runtime: {subclass, Stack, OMeta}} = require '../../bin/metacoffee'
 {runtime: {subclass, Stack, OMeta}} = require '../../lib/metacoffee/index'
 
+_ = require 'lodash'
+
 exactlyCI = (wanted) ->
   next = @_apply("anything")
 
@@ -16,7 +18,14 @@ seqCI = (xs)->
     exactlyCI.apply @, [x]
   return xs
 
-ometa BaseOmeta
+# if you pass in 'a', it will do string compare
+# if you pass in 4, it will do number compare
+charRange = (a, z)->
+  r = @_apply("anything")
+  @_pred (a <= r <= z)
+  return r
+
+ometa BaseOmetaParser
   lineComment            = fromTo('--', '\n'):comment { @comments ?= []; @comments.push comment } -> ['Comment', comment]
   blockComment           = fromTo('/*', '*/'):comment { @comments ?= []; @comments.push comment } -> ['Comment', comment]
   space = ^space
@@ -24,7 +33,7 @@ ometa BaseOmeta
         | blockComment
   spaces = space*
 
-  handleComments = { @_comments = @comments ; @comments = [] } -> @_comments
+  handleComments = { @_comments = @comments ; @comments = [] } -> ['Comments', @_comments]
 
   default_delimiter      = spaces ',' spaces
   repeat1n :r            = apply(r):val1 (default_delimiter apply(r))*:valn -> [val1].concat valn
@@ -37,9 +46,10 @@ ometa BaseOmeta
                          | quoted_string
   quoted_string          = "'" (!"'" char)*:str "'" -> str.join('')
                          | '"' (!'"' char)*:str '"' -> str.join('')
-  testing                = i('ppp')
+  testing                = charRange('a', 'g')+
   keyword :xs            = spaces i(xs)
   i :xs                  = { seqCI.apply(this, [xs]) }
+  charRange :a :z        = { charRange.apply(this, [a, z]) }
 
   # SQL case insensitive keywords
   INDEX = keyword('INDEX')
@@ -84,7 +94,7 @@ ometa BaseOmeta
   # fixme: this is bad
 
 
-#ometa SQLCreateTableParser extends BaseOmeta
+#ometa SQLCreateTableParser extends BaseOmetaParser
 #  param                  = digit
 #  func_call = "thing(" repeat1n('param'):params ")"-> params
 #  quoted_string
@@ -98,7 +108,10 @@ ometa BaseOmeta
 blankObj = ()->
   return {}
 
-ometa SQLCreateTableParser extends BaseOmeta
+ometa SQLCreateTableParser extends BaseOmetaParser
+
+  init = create_table:out -> ['start', out]
+
   sql_safe_name = (letter | digit | '_')+:out -> out.join ''
   sql_name = sql_safe_name:out -> out
              | backtick ( !backtick anything )+:out backtick -> out.join ''
@@ -155,6 +168,47 @@ ometa SQLCreateTableParser extends BaseOmeta
   tbl_engine          = ENGINE "=" "InnoDB":engine {@table_flags.engine = engine} -> engine
   tbl_default_charset = DEFAULT space CHARSET "=" "utf8":charset {@table_flags.charset = charset} -> charset
   tbl_comment         = COMMENT spaces '=' spaces quoted_string:comment {@table_flags.comment = comment} -> comment
+
+a=9
+
+ometa BaseOmetaTranslator
+  trans    = [:t apply(t):ans] -> ans
+  transArr = [trans*]:out -> out
+  stringify :obj = -> JSON.stringify(obj)
+  init = (:t apply(t):ans -> ans)*:xs
+
+b=9
+
+ometa SQLCreateTableTranslator extends BaseOmetaTranslator
+  CreateTable :table_name {@table_name = table_name} [trans*]:defs {console.log 6345, defs} :table_flags trans:comments {console.log 555, comments}
+    -> _.flatten([
+        "tables['#{table_name}'] = #{ @stringify() or {} };",
+        "tables['#{table_name}']['columns'] = {};", comments, defs.join('\n\n')
+       ]).join '\n'
+
+  Comments :comments -> _.map(comments, (c)->"/* #{c} */").join '\n'
+
+  CreateDef :col_name :col_def_obj {console.log 345, col_name, col_def_obj} trans:comments {console.log 44444, col_name}
+    -> [
+         comments, "tables['#{@table_name}']['columns']['#{col_name}'] = #{col_def_obj}"
+       ].join '\n'
+
+  CreatePrimary :columns {console.log 'prim', columns} trans:comments {console.log 'prim end'} -> [ comments, "tables['#{@table_name}'] = #{@stringify(columns)};" ].join '\n'
+
+  CreateForeign {console.log 'foreign start'} :foreign_key_name :index_columns :foreign_table :foreign_columns :comments {console.log 'foreign end'} -> [comments, foreign_key_name, index_columns, foreign_table, foreign_columns].join ''
+
+  CreateIndex {console.log 'index start'} :index_name :index_columns :comments {console.log 'index end'} -> [comments, index_name, index_columns].join ''
+
+  ColDef :data_type :options
+
+  DataType :data_type :func_call :column_flags    -> @stringify _.extend { type: data_type, func: func_call }, column_flags
+  DataType :data_type :column_flags    -> @stringify _.extend { type: data_type }, column_flags
+
+  FuncCall :values -> "(#{@stringify values})"
+
+
+
+
 
 
 a=9
@@ -214,10 +268,19 @@ CREATE TABLE project ( -- test comment
 '''
 
 
-console.log SQLCreateTableParser.matchAll(str, 'create_table')[2]
+tree = SQLCreateTableParser.matchAll str, 'create_table'
 
-#str = 'PPp'
-#console.log SQLCreateTableParser.matchAll str, 'testing'
+console.log 'tree', tree
+
+console.log 123
+
+result = SQLCreateTableTranslator.matchAll tree, 'init'
+
+console.log 'result', result
+
+
+str = 'aaaabcdefghij'
+console.log SQLCreateTableParser.matchAll str, 'testing'
 
 #str = '`'
 #console.log SQLCreateTableParser.matchAll str, 'backtick'
